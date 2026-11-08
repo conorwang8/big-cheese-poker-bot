@@ -108,7 +108,7 @@ python tools/benchmark_bot.py --deals 1000 --seeds 2903 --opponents self always_
 python tools/stress_bot.py --deals 1000 --seeds 733 1907 --opponents reference --reference validation/reference_strategy_v1.py
 ```
 
-See `VALIDATION.md` for measured results and limitations. Slumbot uses two-card
+Raw match results are in `validation/`. Slumbot uses two-card
 Texas Hold'em, so it cannot serve as a direct opponent for this short-deck
 five-card Omaha submission; no Slumbot match was run.
 

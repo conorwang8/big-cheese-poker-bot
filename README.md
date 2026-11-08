@@ -8,7 +8,7 @@ team **big-cheese**. See [BOT_GUIDE.md](BOT_GUIDE.md) for setup, strategy,
 benchmark commands, and submission steps. The original participant
 instructions follow below.
 
-Measured test and match results are in [VALIDATION.md](VALIDATION.md).
+Raw test and match results are in [`validation/`](validation/).
 
 Team repository: [conorwang8/big-cheese-poker-bot](https://github.com/conorwang8/big-cheese-poker-bot).
 
