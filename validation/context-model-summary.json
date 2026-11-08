@@ -1,0 +1,57 @@
+{
+  "primary": [
+    {
+      "opponent": "twostack",
+      "baseline": -0.4015,
+      "candidate": 0.16025,
+      "change": 0.56175,
+      "ci95": [
+        -0.05256039711334104,
+        1.176060397113341
+      ]
+    },
+    {
+      "opponent": "shortstack",
+      "baseline": -0.24125,
+      "candidate": -0.0715,
+      "change": 0.16975,
+      "ci95": [
+        -0.36091998279841636,
+        0.7004199827984163
+      ]
+    },
+    {
+      "opponent": "outliers",
+      "baseline": -0.4155,
+      "candidate": -0.2385,
+      "change": 0.177,
+      "ci95": [
+        -0.48088603060973684,
+        0.8348860306097368
+      ]
+    }
+  ],
+  "combined_paired_gain": 0.30283333333333334,
+  "combined_ci95": [
+    -0.04543718115977208,
+    0.6511038478264388
+  ],
+  "runtime_ok": true,
+  "no_internal_fallbacks": true,
+  "stress_passed": true,
+  "no_primary_point_regression_over_quarter_bb": true,
+  "supported_improvement": false,
+  "promote": false,
+  "unit_tests": 32,
+  "http_hands": 40000,
+  "development_hands": 36000,
+  "baseline_commit": "6d430346b4b6d06d2781a17be55cb8cd451ad723",
+  "source_hashes": {
+    "baseline": "ff6383dd33d21d46621c8acf445d6fd94be545695810ae9a64118fba5286af61",
+    "candidate": "de3614d057a831c0c533ff2f34851814bdc0b88adf7ffecc1afbe8d247c6adbd"
+  },
+  "maximum_hero_time": 6.349148,
+  "publication_note": "Implemented and pushed at user request. Holdout mean improved but the 95% interval includes zero; no statistically established win-rate improvement is claimed.",
+  "publication_source_sha256": "6eb9ac3e984d031f363a0eb91740ae4a2407ba790d6beb5e8b5c822709cde489",
+  "source_equivalence_note": "Only removed an extra trailing blank line from the tested source; Python AST is identical."
+}

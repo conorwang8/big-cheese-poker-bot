@@ -121,6 +121,7 @@ def percentiles(values):
 
 def start_half(config, memory):
     memory.update(
+        context_nodes={}, context_pools={}, context_hand=-1, context_seen=0, context_evidence={},
         hands_played=0, rng=np.random.default_rng(20261107),
         stats=[{"open": [7.0, 3.0], "facing": [3.0, 6.0, 1.0]} for _ in range(4)],
         active_hand=-1, seen=0, cache=None, last_obs=None, last_action=None,
@@ -163,6 +164,7 @@ def _history(obs, memory):
             evidence[int(street)] = (record.action, facing)
         opp_bet = record.street_total
     memory["seen"] = len(obs.action_history)
+    _context_history(obs, memory)
     return evidence
 
 
@@ -230,34 +232,32 @@ def _selection(strength, fraction):
 
 
 def _range_weights(obs, memory, cache, evidence):
-    weights = np.ones(len(cache["outcomes"]))
-    for street, (action, facing) in evidence.items():
-        stat = memory["stats"][street]
-        if action in (Action.RAISE_HALF, Action.RAISE_POT):
-            counts = stat["facing"] if facing else stat["open"]
-            fraction = counts[-1] / sum(counts)
-            if fraction >= 0.86:
-                continue
-            strength = _strength(cache, street, obs.board)
-            likelihood = _selection(strength, fraction)
-            if street == int(Street.RIVER):
-                likelihood = _river_raise_likelihood(obs, memory, facing, strength, fraction, likelihood)
-        elif facing:
-            counts = stat["facing"]
-            fraction = 1.0 - counts[0] / sum(counts)
-            if fraction >= 0.86:
-                continue
-            likelihood = _selection(_strength(cache, street, obs.board), fraction)
+    weights = np.ones(len(cache['outcomes']))
+    for street, (action, key) in memory['context_evidence'].items():
+        rates = _context_rates(memory, key)
+        strength = _strength(cache, street, obs.board)
+        raising = float(rates[2] + rates[3])
+        top = _selection(strength, raising)
+        if action == Action.RAISE_POT:
+            # A mixture prevents bet-size stereotypes from excluding bluffs.
+            likelihood = 0.55 * top + 0.45 * _selection(strength, float(rates[3]))
+        elif action == Action.RAISE_HALF:
+            likelihood = np.maximum(0.06, top - 0.45 * _selection(strength, float(rates[3])))
+        elif key[2] >= 2:
+            surviving = _selection(strength, 1.0-float(rates[0]))
+            likelihood = np.maximum(0.08, surviving - 0.65 * top)
+        elif key[2] == 0:
+            surviving = _selection(strength, 1.0-float(rates[0]))
+            likelihood = np.maximum(0.08, surviving - 0.65 * top)
         else:
-            counts = stat["open"]
-            fraction = counts[1] / sum(counts)
-            if fraction < 0.08:
-                continue
-            selected = _selection(_strength(cache, street, obs.board), fraction)
-            likelihood = np.maximum(0.20, 1.0 - selected * (fraction / selected.mean()))
-        # Temper correlated preflop/postflop evidence to avoid false certainty.
-        weights *= likelihood ** 0.65
+            likelihood = np.maximum(0.20, 1.0-top)
+        if street == int(Street.RIVER) and action in (Action.RAISE_HALF, Action.RAISE_POT):
+            likelihood = _river_raise_likelihood(obs, memory, key[2] >= 2, strength, raising, likelihood)
+        # Earlier streets have useful evidence, but correlated board evolution
+        # and draws make that evidence less precise than current-street action.
+        weights *= likelihood ** (0.65 if street == int(obs.street) else 0.35)
     return weights
+
 
 
 def _river_bucket(obs, facing):
@@ -316,14 +316,15 @@ def _choose(obs, memory, evidence):
         opp_call = min(obs.opp_stack, max(0, raise_to - obs.opp_bet))
         # Larger bets induce more folds, unless observations say they never fold.
         size = opp_call / max(1, obs.pot + cost)
-        adjusted_fold = min(0.90, fold_rate * (0.75 + size))
+        adjusted_fold = min(0.90, _context_fold_rate(obs, memory, action))
         if adjusted_fold <= 0.14 or opp_call / max(1, obs.pot + cost + opp_call) <= 0.08:
             probability_fold = 0.0
             called_equity = equity
         else:
             if strength is None:
                 strength = _strength(cache, int(obs.street), obs.board)
-            continue_probability = _selection(strength, 1.0 - adjusted_fold)
+            ranks = _weighted_percentiles(strength, weights) if CONDITIONAL_CONTINUATION else strength
+            continue_probability = _selection(ranks, 1.0 - adjusted_fold)
             continuing = weights * continue_probability
             continue_mass = float(continuing.sum())
             probability_fold = 1.0 - continue_mass / mass
@@ -358,6 +359,7 @@ def decide(obs, memory):
 
 def finish_hand(result, memory):
     start = perf_counter()
+    _context_finish(result, memory)
     obs, action = memory["last_obs"], memory["last_action"]
     # Forget old behavior gradually, retaining the original small-sample priors.
     for stat in memory["stats"]:
@@ -404,3 +406,114 @@ def finish_hand(result, memory):
         print(f"PocketPilot diagnostics: strategy_seconds={memory['spent']:.4f} "
               f"decisions={memory['decisions']} fallbacks={memory['fallbacks']}", flush=True)
     memory["spent"] += perf_counter() - start
+
+
+# Context-specific opponent modeling; learned state lives in memory.
+CONDITIONAL_CONTINUATION = False
+
+def _context_key(street, opponent_button, price, pot, raised_before, first=False):
+    # 0: small-blind opening; 1: free option/check; 2: face first bet;
+    # 3: face a raise after already betting/raising on this street.
+    kind = 0 if first else 1 if price <= 0 else 3 if raised_before else 2
+    size = int(price / max(1, pot + price) >= 0.29) if kind >= 2 else 0
+    return int(street), bool(opponent_button), kind, size
+
+
+def _context_note(memory, key, action):
+    index = (Action.FOLD, Action.CHECK_CALL, Action.RAISE_HALF, Action.RAISE_POT).index(action)
+    pool_key = (key[0], key[2])
+    if key not in memory['context_nodes']:
+        memory['context_nodes'][key] = np.zeros(4)
+    if pool_key not in memory['context_pools']:
+        memory['context_pools'][pool_key] = np.zeros(4)
+    memory['context_nodes'][key][index] += 1.0
+    memory['context_pools'][pool_key][index] += 1.0
+
+
+def _context_rates(memory, key):
+    if key[2] == 0:
+        prior = np.array((0.10, 0.45, 0.30, 0.15))
+    elif key[2] == 1:
+        prior = np.array((0.0, 0.65, 0.25, 0.10))
+    elif key[2] == 2:
+        prior = np.array((0.30, 0.55, 0.10, 0.05))
+    else:
+        prior = np.array((0.20, 0.65, 0.08, 0.07))
+    pool = memory['context_pools'].get((key[0], key[2]))
+    if pool is not None:
+        prior = (pool + 8.0 * prior) / (pool.sum() + 8.0)
+    local = memory['context_nodes'].get(key)
+    if local is None:
+        return prior
+    return (local + 12.0 * prior) / (local.sum() + 12.0)
+
+
+def _response_context(obs, action):
+    cost = obs.raise_to[action] - obs.my_bet
+    price = min(obs.opp_stack, max(0, obs.raise_to[action]-obs.opp_bet))
+    raised = any(not r.is_me and r.street == obs.street and
+                 r.action in (Action.RAISE_HALF, Action.RAISE_POT) for r in obs.action_history)
+    return _context_key(obs.street, not obs.is_button, price, obs.pot+cost, raised)
+
+
+def _context_fold_rate(obs, memory, action):
+    return float(_context_rates(memory, _response_context(obs, action))[0])
+
+
+def _weighted_percentiles(values, weights):
+    order = np.argsort(values)
+    ordered = values[order]
+    prefix = np.r_[0.0, np.cumsum(weights[order])]
+    left = np.searchsorted(ordered, values, side='left')
+    right = np.searchsorted(ordered, values, side='right')
+    return (prefix[left] + prefix[right]) / (2.0 * prefix[-1])
+
+
+def _context_history(obs, memory):
+    if memory['context_hand'] != obs.hand_index:
+        memory['context_hand'] = obs.hand_index
+        memory['context_seen'] = 0
+    mine = obs.big_blind // 2 if obs.is_button else obs.big_blind
+    theirs = obs.big_blind if obs.is_button else obs.big_blind // 2
+    pot, street, raised = 3 * obs.big_blind // 2, Street.PREFLOP, False
+    detailed = {}
+    for i, record in enumerate(obs.action_history):
+        if record.street != street:
+            street, mine, theirs, raised = record.street, 0, 0, False
+        if record.is_me:
+            mine = record.street_total
+        else:
+            key = _context_key(street, not obs.is_button, mine-theirs, pot, raised,
+                               first=i == 0 and street == Street.PREFLOP)
+            if i >= memory['context_seen']:
+                _context_note(memory, key, record.action)
+            prior = detailed.get(int(street))
+            is_raise = record.action in (Action.RAISE_HALF, Action.RAISE_POT)
+            if prior is None or is_raise or prior[0] == Action.CHECK_CALL:
+                detailed[int(street)] = (record.action, key)
+            raised |= is_raise
+            theirs = record.street_total
+        pot += record.amount
+    memory['context_seen'] = len(obs.action_history)
+    memory['context_evidence'] = detailed
+
+
+def _context_finish(result, memory):
+    obs, action = memory['last_obs'], memory['last_action']
+    if obs is not None and obs.hand_index == result.hand_index:
+        if action in (Action.RAISE_HALF, Action.RAISE_POT):
+            if result.went_to_showdown:
+                _context_note(memory, _response_context(obs, action), Action.CHECK_CALL)
+            elif result.winner == 'me':
+                _context_note(memory, _response_context(obs, action), Action.FOLD)
+        elif (action == Action.CHECK_CALL and obs.to_call == 0 and obs.street == Street.RIVER
+              and not obs.is_button and result.went_to_showdown):
+            key = _context_key(Street.RIVER, True, 0, obs.pot, False)
+            _context_note(memory, key, Action.CHECK_CALL)
+    elif not result.went_to_showdown and result.winner == 'me' and not result.board:
+        # Opponent folded their small blind; we never received an observation.
+        _context_note(memory, (0, True, 0, 0), Action.FOLD)
+    for counts in memory['context_nodes'].values():
+        counts *= 0.995
+    for counts in memory['context_pools'].values():
+        counts *= 0.995
