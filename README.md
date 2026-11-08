@@ -4,9 +4,7 @@ Run the commands below from this repository's root. The bot files are at
 the root, as required by the datathon submission system.
 
 This copy contains **PocketPilot**, a self-contained Short Deck PLO5 bot for
-team **big-cheese**. See [BOT_GUIDE.md](BOT_GUIDE.md) for setup, strategy,
-benchmark commands, and submission steps. The original participant
-instructions follow below.
+team **big-cheese**. The original participant instructions follow below.
 
 Raw test and match results are in [`validation/`](validation/).
 
